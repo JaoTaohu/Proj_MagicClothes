@@ -88,6 +88,10 @@ def call_inpaint_api(payload):
         print(f"Error calling inpaint API: {e}")
         return None
 
+LORA_PROMPTS = {
+    "brwnV3-000004.safetensors": "men,wearing,brown,<lora:brwnV3-000003:1.3>,shirt",
+    "greentV2-000002.safetensors": "men,wearing,green,<lora:greentV2-000002:1.3>,t-shirt",
+}
 
 # Flask Route - Upload Image & Mask for Inpainting
 @app.route('/inpaint', methods=['POST'])
@@ -107,24 +111,31 @@ def inpaint_file():
     if not encoded_image or not encoded_mask:
         return jsonify({"error": "Failed to encode image or mask"}), 500
 
-    # Prepare payload for inpainting
+    # Get the selected LoRA model from the form data
+    lora_model = request.form.get("lora_model", FIXED_SETTINGS["lora_model"])
+
+    # Get the corresponding prompt for the selected LoRA
+    prompt = LORA_PROMPTS.get(lora_model, FIXED_SETTINGS["prompt"])
+
+
     inpaint_payload = {
-        "prompt": FIXED_SETTINGS["prompt"],
-        "negative_prompt": FIXED_SETTINGS["negative_prompt"],
-        "seed": FIXED_SETTINGS["seed"],
-        "steps": FIXED_SETTINGS["steps"],
-        "sampler_name": FIXED_SETTINGS["sampler_name"],
-        "width": FIXED_SETTINGS["width"],
-        "height": FIXED_SETTINGS["height"],
-        "batch_size": FIXED_SETTINGS["batch_size"],
-        "cfg_scale": FIXED_SETTINGS["cfg_scale"],
-        "init_images": [encoded_image],  # Base64 input image
-        "mask": encoded_mask,  # Base64 mask image
-        "denoising_strength": FIXED_SETTINGS["denoising_strength"],
-        "inpainting_fill": 1,  # 1 = latent noise, 2 = latent nothing
-        "inpaint_full_res": True,
-        "inpaint_full_res_padding": 32,
-        "resize_mode": 1,
+    "prompt": prompt,  # ✅ Dynamically assigned based on LoRA
+    "negative_prompt": FIXED_SETTINGS["negative_prompt"],
+    "seed": FIXED_SETTINGS["seed"],
+    "steps": FIXED_SETTINGS["steps"],
+    "sampler_name": FIXED_SETTINGS["sampler_name"],
+    "width": FIXED_SETTINGS["width"],
+    "height": FIXED_SETTINGS["height"],
+    "batch_size": FIXED_SETTINGS["batch_size"],
+    "cfg_scale": FIXED_SETTINGS["cfg_scale"],
+    "init_images": [encoded_image],  # Base64 input image
+    "mask": encoded_mask,  # Base64 mask image
+    "denoising_strength": FIXED_SETTINGS["denoising_strength"],
+    "inpainting_fill": 1,
+    "inpaint_full_res": True,
+    "inpaint_full_res_padding": 32,
+    "resize_mode": 1,
+    "lora_model": lora_model  # ✅ Include selected LoRA model
     }
 
 
@@ -143,90 +154,121 @@ def get_output_image(filename):
 @app.route('/')
 def index():
     return render_template_string("""
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Upload Image for Inpainting</title>
-        <style>
-            canvas { border: 1px solid black; cursor: crosshair; }
-        </style>
-    </head>
-    <body>
-        <h1>Upload an Image & Paint Mask</h1>
-        <input type="file" id="fileInput">
-        <button onclick="clearMask()">Clear Mask</button>
-        <button onclick="submitImages()">Submit</button>
-        <br><br>
-        <canvas id="canvas"></canvas>
-        <br>
-        <img id="outputImage" style="display:none; width: 300px;">
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Upload Image for Inpainting</title>
+    <style>
+        canvas { border: 1px solid black; cursor: crosshair; }
+        .lora-button {
+            border: 2px solid transparent;
+            padding: 5px;
+            cursor: pointer;
+            display: inline-block;
+            margin: 5px;
+        }
+        .lora-button.selected {
+            border: 2px solid blue;
+        }
+    </style>
+</head>
+<body>
+    <h1>Upload an Image & Paint Mask</h1>
+    
+    <div>
+        <img src="static/blue.png" class="lora-button" id="brwnV3" 
+        onclick="selectLora('brwnV3-000003.safetensors', this)" 
+        style="width: 50px; height: 50px;">
+        <img src="static/red.png" class="lora-button" id="brwnV3" 
+        onclick="selectLora('greentV2-000002.safetensors', this)" 
+        style="width: 50px; height: 50px;">
+    </div>
+    
+    <input type="file" id="fileInput">
+    <button onclick="clearMask()">Clear Mask</button>
+    <button onclick="submitImages()">Submit</button>
+    <br><br>
+    <canvas id="canvas"></canvas>
+    <br>
+    <img id="outputImage" style="display:none; width: 300px;">
 
-        <script>
-            let canvas = document.getElementById("canvas");
-            let ctx = canvas.getContext("2d");
-            let painting = false;
-            let img = new Image();
+    <script>
+        let canvas = document.getElementById("canvas");
+        let ctx = canvas.getContext("2d");
+        let painting = false;
+        let img = new Image();
+        let selectedLora = "brwnV3-000004.safetensors";
 
-            document.getElementById("fileInput").addEventListener("change", function(e) {
-                let file = e.target.files[0];
-                if (!file) return;
+        function selectLora(lora, element) {
+            selectedLora = lora;
+            document.querySelectorAll('.lora-button').forEach(btn => btn.classList.remove('selected'));
+            element.classList.add('selected');
+        }
 
-                let reader = new FileReader();
-                reader.onload = function(event) {
-                    img.onload = function() {
-                        canvas.width = img.width;
-                        canvas.height = img.height;
-                        ctx.drawImage(img, 0, 0);
-                    };
-                    img.src = event.target.result;
+        document.getElementById("fileInput").addEventListener("change", function(e) {
+            let file = e.target.files[0];
+            if (!file) return;
+
+            let reader = new FileReader();
+            reader.onload = function(event) {
+                img.onload = function() {
+                    canvas.width = img.width;
+                    canvas.height = img.height;
+                    ctx.drawImage(img, 0, 0);
                 };
-                reader.readAsDataURL(file);
-            });
+                img.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+        });
 
-            function startPainting(event) {
-                painting = true;
-                ctx.lineWidth = 30;
-                ctx.lineCap = "round";
-                ctx.strokeStyle = "white";
-                draw(event);
-            }
+        function startPainting(event) {
+            painting = true;
+            ctx.lineWidth = 30;
+            ctx.lineCap = "round";
+            ctx.strokeStyle = "white";
+            draw(event);
+        }
 
-            function stopPainting() { painting = false; ctx.beginPath(); }
+        function stopPainting() { painting = false; ctx.beginPath(); }
 
-            function draw(event) {
-                if (!painting) return;
-                ctx.lineTo(event.offsetX, event.offsetY);
-                ctx.stroke();
-                ctx.beginPath();
-                ctx.moveTo(event.offsetX, event.offsetY);
-            }
+        function draw(event) {
+            if (!painting) return;
+            ctx.lineTo(event.offsetX, event.offsetY);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(event.offsetX, event.offsetY);
+        }
 
-            function clearMask() { ctx.drawImage(img, 0, 0); }
+        function clearMask() { ctx.drawImage(img, 0, 0); }
 
-            async function submitImages() {
-                let formData = new FormData();
-                formData.append("file", document.getElementById("fileInput").files[0]);
-                canvas.toBlob(blob => {
-                    formData.append("mask", blob);
-                    fetch("/inpaint", { method: "POST", body: formData })
-                        .then(res => res.json())
-                        .then(data => {
-                            if (data.image_url) {
-                                document.getElementById("outputImage").src = data.image_url;
-                                document.getElementById("outputImage").style.display = "block";
-                            }
-                        });
+        async function submitImages() {
+            let formData = new FormData();
+            formData.append("file", document.getElementById("fileInput").files[0]);
+            formData.append("lora_model", selectedLora); 
+
+        canvas.toBlob(blob => {
+            formData.append("mask", blob);
+            fetch("/inpaint", { method: "POST", body: formData })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.image_url) {
+                        document.getElementById("outputImage").src = data.image_url;
+                        document.getElementById("outputImage").style.display = "block";
+                    }
                 });
-            }
+        });
+    }
 
-            canvas.addEventListener("mousedown", startPainting);
-            canvas.addEventListener("mouseup", stopPainting);
-            canvas.addEventListener("mousemove", draw);
-        </script>
-    </body>
-    </html>
+
+        canvas.addEventListener("mousedown", startPainting);
+        canvas.addEventListener("mouseup", stopPainting);
+        canvas.addEventListener("mousemove", draw);
+    </script>
+</body>
+</html>
+
     """)
 
 if __name__ == '__main__':
