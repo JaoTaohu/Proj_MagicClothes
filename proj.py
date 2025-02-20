@@ -197,6 +197,8 @@ def index():
     <img id="outputImage" style="display:none; width: 300px;">
 
     <script>
+        const CANVAS_WIDTH = 576;
+        const CANVAS_HEIGHT = 768;
         let canvas = document.getElementById("canvas");
         let ctx = canvas.getContext("2d");
         let painting = false;
@@ -208,30 +210,55 @@ def index():
         let maskCanvas = document.createElement("canvas");
         let maskCtx = maskCanvas.getContext("2d");
 
+        // Set fixed canvas size
+        canvas.width = CANVAS_WIDTH;
+        canvas.height = CANVAS_HEIGHT;
+        maskCanvas.width = CANVAS_WIDTH;
+        maskCanvas.height = CANVAS_HEIGHT;
+
+        // Ensure the canvas has a border and correct styling
+        canvas.style.width = `${CANVAS_WIDTH}px`;
+        canvas.style.height = `${CANVAS_HEIGHT}px`;
+        canvas.style.border = "1px solid black";
+        canvas.style.display = "block";
+
         function selectLora(lora, element) {
             selectedLora = lora;
-            document.querySelectorAll('.lora-button').forEach(btn => btn.classList.remove('selected'));
-            element.classList.add('selected');
+            document.querySelectorAll(".lora-button").forEach((btn) => btn.classList.remove("selected"));
+            element.classList.add("selected");
         }
 
-        document.getElementById("fileInput").addEventListener("change", function(e) {
+        document.getElementById("fileInput").addEventListener("change", function (e) {
             let file = e.target.files[0];
             if (!file) return;
 
             let reader = new FileReader();
-            reader.onload = function(event) {
-                img.onload = function() {
-                    // Set both canvases to match image size
-                    canvas.width = img.width;
-                    canvas.height = img.height;
-                    maskCanvas.width = img.width;
-                    maskCanvas.height = img.height;
+            reader.onload = function (event) {
+                img.onload = function () {
+                    ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT); // Clear canvas before drawing new image
 
-                    // Draw image on the main canvas
-                    ctx.drawImage(img, 0, 0);
-                    
-                    // Clear the mask canvas
-                    maskCtx.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
+                    // Fill background with white
+                    ctx.fillStyle = "white";
+                    ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+                    // Resize image while keeping aspect ratio
+                    let imgRatio = img.width / img.height;
+                    let canvasRatio = CANVAS_WIDTH / CANVAS_HEIGHT;
+                    let newWidth, newHeight;
+
+                    if (imgRatio > canvasRatio) {
+                        newWidth = CANVAS_WIDTH;
+                        newHeight = CANVAS_WIDTH / imgRatio;
+                    } else {
+                        newHeight = CANVAS_HEIGHT;
+                        newWidth = CANVAS_HEIGHT * imgRatio;
+                    }
+
+                    let offsetX = (CANVAS_WIDTH - newWidth) / 2;
+                    let offsetY = (CANVAS_HEIGHT - newHeight) / 2;
+
+                    ctx.drawImage(img, offsetX, offsetY, newWidth, newHeight);
+                    maskCtx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT); // Reset mask
                 };
                 img.src = event.target.result;
             };
@@ -248,20 +275,25 @@ def index():
             maskCtx.lineWidth = 30;
             maskCtx.lineCap = "round";
             maskCtx.strokeStyle = "white"; // Always paint white for the mask
-            maskCtx.globalCompositeOperation = eraseMode ? "destination-out" : "source-over"; // Use "destination-out" to erase
+            maskCtx.globalCompositeOperation = eraseMode ? "destination-out" : "source-over"; // "destination-out" erases
             draw(event);
         }
 
-        function stopPainting() { 
-            painting = false; 
-            maskCtx.beginPath(); 
+        function stopPainting() {
+            painting = false;
+            maskCtx.beginPath();
             updateCanvas();
         }
 
         function draw(event) {
             if (!painting) return;
-            let x = event.offsetX;
-            let y = event.offsetY;
+            
+            let rect = canvas.getBoundingClientRect();
+            let scaleX = img.width / CANVAS_WIDTH; // Scale factor for X
+            let scaleY = img.height / CANVAS_HEIGHT; // Scale factor for Y
+            
+            let x = (event.clientX - rect.left) * scaleX;
+            let y = (event.clientY - rect.top) * scaleY;
 
             maskCtx.lineTo(x, y);
             maskCtx.stroke();
@@ -270,26 +302,28 @@ def index():
             updateCanvas();
         }
 
+
         function updateCanvas() {
-            ctx.drawImage(img, 0, 0); // Redraw the original image
+            ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT); // Clear the canvas
+            ctx.drawImage(img, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT); // Redraw image
             ctx.drawImage(maskCanvas, 0, 0); // Apply the mask on top
         }
 
-        function clearMask() { 
-            maskCtx.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
+        function clearMask() {
+            maskCtx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT); // Clear mask only
             updateCanvas();
         }
 
         async function submitImages() {
             let formData = new FormData();
             formData.append("file", document.getElementById("fileInput").files[0]);
-            formData.append("lora_model", selectedLora); 
+            formData.append("lora_model", selectedLora);
 
-            maskCanvas.toBlob(blob => {
+            maskCanvas.toBlob((blob) => {
                 formData.append("mask", blob);
                 fetch("/inpaint", { method: "POST", body: formData })
-                    .then(res => res.json())
-                    .then(data => {
+                    .then((res) => res.json())
+                    .then((data) => {
                         if (data.image_url) {
                             document.getElementById("outputImage").src = data.image_url;
                             document.getElementById("outputImage").style.display = "block";
@@ -301,6 +335,7 @@ def index():
         canvas.addEventListener("mousedown", startPainting);
         canvas.addEventListener("mouseup", stopPainting);
         canvas.addEventListener("mousemove", draw);
+
     </script>
 </body>
 </html>
