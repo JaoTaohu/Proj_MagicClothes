@@ -178,17 +178,19 @@ def index():
     <h1>Upload an Image & Paint Mask</h1>
     
     <div>
-        <img src="static/blue.png" class="lora-button" id="brwnV3" 
+        <img src="static/blue.png" class="lora-button" 
         onclick="selectLora('brwnV3-000003.safetensors', this)" 
         style="width: 50px; height: 50px;">
-        <img src="static/red.png" class="lora-button" id="brwnV3" 
+        <img src="static/red.png" class="lora-button" 
         onclick="selectLora('greentV2-000002.safetensors', this)" 
         style="width: 50px; height: 50px;">
     </div>
     
     <input type="file" id="fileInput">
     <button onclick="clearMask()">Clear Mask</button>
+    <button onclick="toggleEraseMode()">Erase Mask</button>
     <button onclick="submitImages()">Submit</button>
+
     <br><br>
     <canvas id="canvas"></canvas>
     <br>
@@ -198,8 +200,13 @@ def index():
         let canvas = document.getElementById("canvas");
         let ctx = canvas.getContext("2d");
         let painting = false;
+        let eraseMode = false;
         let img = new Image();
         let selectedLora = "brwnV3-000004.safetensors";
+
+        // Create an offscreen canvas for the mask
+        let maskCanvas = document.createElement("canvas");
+        let maskCtx = maskCanvas.getContext("2d");
 
         function selectLora(lora, element) {
             selectedLora = lora;
@@ -214,53 +221,82 @@ def index():
             let reader = new FileReader();
             reader.onload = function(event) {
                 img.onload = function() {
+                    // Set both canvases to match image size
                     canvas.width = img.width;
                     canvas.height = img.height;
+                    maskCanvas.width = img.width;
+                    maskCanvas.height = img.height;
+
+                    // Draw image on the main canvas
                     ctx.drawImage(img, 0, 0);
+                    
+                    // Clear the mask canvas
+                    maskCtx.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
                 };
                 img.src = event.target.result;
             };
             reader.readAsDataURL(file);
         });
 
+        function toggleEraseMode() {
+            eraseMode = !eraseMode;
+            document.querySelector("button[onclick='toggleEraseMode()']").innerText = eraseMode ? "Switch to Paint Mask" : "Erase Mask";
+        }
+
         function startPainting(event) {
             painting = true;
-            ctx.lineWidth = 30;
-            ctx.lineCap = "round";
-            ctx.strokeStyle = "white";
+            maskCtx.lineWidth = 30;
+            maskCtx.lineCap = "round";
+            maskCtx.strokeStyle = "white"; // Always paint white for the mask
+            maskCtx.globalCompositeOperation = eraseMode ? "destination-out" : "source-over"; // Use "destination-out" to erase
             draw(event);
         }
 
-        function stopPainting() { painting = false; ctx.beginPath(); }
+        function stopPainting() { 
+            painting = false; 
+            maskCtx.beginPath(); 
+            updateCanvas();
+        }
 
         function draw(event) {
             if (!painting) return;
-            ctx.lineTo(event.offsetX, event.offsetY);
-            ctx.stroke();
-            ctx.beginPath();
-            ctx.moveTo(event.offsetX, event.offsetY);
+            let x = event.offsetX;
+            let y = event.offsetY;
+
+            maskCtx.lineTo(x, y);
+            maskCtx.stroke();
+            maskCtx.beginPath();
+            maskCtx.moveTo(x, y);
+            updateCanvas();
         }
 
-        function clearMask() { ctx.drawImage(img, 0, 0); }
+        function updateCanvas() {
+            ctx.drawImage(img, 0, 0); // Redraw the original image
+            ctx.drawImage(maskCanvas, 0, 0); // Apply the mask on top
+        }
+
+        function clearMask() { 
+            maskCtx.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
+            updateCanvas();
+        }
 
         async function submitImages() {
             let formData = new FormData();
             formData.append("file", document.getElementById("fileInput").files[0]);
             formData.append("lora_model", selectedLora); 
 
-        canvas.toBlob(blob => {
-            formData.append("mask", blob);
-            fetch("/inpaint", { method: "POST", body: formData })
-                .then(res => res.json())
-                .then(data => {
-                    if (data.image_url) {
-                        document.getElementById("outputImage").src = data.image_url;
-                        document.getElementById("outputImage").style.display = "block";
-                    }
-                });
-        });
-    }
-
+            maskCanvas.toBlob(blob => {
+                formData.append("mask", blob);
+                fetch("/inpaint", { method: "POST", body: formData })
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.image_url) {
+                            document.getElementById("outputImage").src = data.image_url;
+                            document.getElementById("outputImage").style.display = "block";
+                        }
+                    });
+            });
+        }
 
         canvas.addEventListener("mousedown", startPainting);
         canvas.addEventListener("mouseup", stopPainting);
